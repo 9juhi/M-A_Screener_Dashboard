@@ -36,33 +36,6 @@ The project combines market data, financial statement data, engineered metrics, 
 └── requirements.txt
 ```
 
-## Setup
-
-Clone the repository:
-
-```bash
-git clone https://github.com/9juhi/M-A_Screener_Dashboard.git
-cd M-A_Screener_Dashboard
-```
-
-Create and activate a virtual environment:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-Set your SimFin API key before running the full data pipeline:
-
-```bash
-export SIMFIN_API_KEY="your_simfin_api_key"
-```
 
 ## Running the Dashboard
 
