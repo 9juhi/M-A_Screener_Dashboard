@@ -1,15 +1,3 @@
-# explore_polygon_market_data.py
-# --------------------------------------------------------
-# Isolated Polygon.io exploration for market snapshot fields.
-# This does not feed the main pipeline unless you explicitly decide to.
-#
-# Required:
-#   export POLYGON_API_KEY="your_api_key_here"
-#
-# Output:
-#   data/raw/polygon_market_data_sample.csv
-# --------------------------------------------------------
-
 import os
 import time
 from datetime import date, timedelta

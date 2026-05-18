@@ -1,26 +1,3 @@
-# comps_engine.py
-# ─────────────────────────────────────────────────────────
-# Phase 4: Comparable Company Analysis (Comps) Engine
-#
-# For any given target company (by ticker), this module:
-#   1. Selects a peer group of comparable companies
-#   2. Computes valuation multiples across the peer group
-#   3. Applies peer median multiples to the target's
-#      own financials to derive an implied valuation
-#   4. Runs a scenario analysis (what-if EBITDA grows X%)
-#
-# Design philosophy:
-#   This engine is written as a collection of pure functions
-#   that each take a DataFrame and return a DataFrame.
-#   That makes it easy to call from the Streamlit dashboard
-#   interactively — the dashboard just calls run_comps(ticker)
-#   and gets back everything it needs to render.
-#
-# Output:
-#   data/processed/comps_results/  ← one JSON per company (demo)
-#   The engine is also importable for use in the dashboard.
-# ─────────────────────────────────────────────────────────
-
 import pandas as pd
 import numpy as np
 import os
@@ -28,92 +5,47 @@ import json
 from config import PROCESSED_DIR
 
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-
-# Minimum number of peers we want in a comps table.
-# If we can't find this many with tight filters, we relax them.
 MIN_PEERS = 5
 
-# Maximum number of peers to include in the comps table.
-# More than 12 peers starts to look like a full sector report
-# rather than a focused comparable analysis.
+
 MAX_PEERS = 12
 
-# EV size band for peer selection.
-# A peer's EV must be between (target_EV × LOW) and (target_EV × HIGH).
-# 0.3x to 3x means a $10B EV company will consider peers from $3B to $30B.
-# This is the standard "within one order of magnitude" rule of thumb.
+
 SIZE_BAND_LOW  = 0.3
 SIZE_BAND_HIGH = 3.0
 
-# Relaxed size band used when MIN_PEERS can't be found with the tight band.
-# Opens up to roughly 10x size difference.
+
 SIZE_BAND_LOW_RELAXED  = 0.1
 SIZE_BAND_HIGH_RELAXED = 10.0
 
-# EBITDA growth scenarios for the what-if analysis.
-# These represent post-acquisition improvement assumptions.
+
 EBITDA_GROWTH_SCENARIOS = [-0.10, 0.00, 0.10, 0.20, 0.30]
 
-# revised metric: Growth rate filter
-# A peer's 5-year revenue CAGR must be within this many percentage points
-# of the target's CAGR to be considered "comparable growth stage."
-# Example: target CAGR = 14%, window = 15pp → peers must be between -1% and 29%
-# This directly excludes hyper-growth companies (Datadog at 39%) from
-# being compared to mature growers (Adobe at 14%).
-GROWTH_CAGR_WINDOW_PP = 15.0   # percentage points, not decimal
 
-# revised metric: EBITDA margin filter
-# A peer's EBITDA margin must be within this many percentage points
-# of the target's margin to be considered "same profitability stage."
-# Example: target margin = 35%, window = 25pp → peers must be between 10% and 60%
-# This excludes early-stage companies burning cash from mature company comps.
-MARGIN_WINDOW_PP = 25.0        # percentage points
+GROWTH_CAGR_WINDOW_PP = 15.0
 
-# revised metric: IQR multiplier for outlier removal on multiples.
-# Standard box-plot definition: outlier > Q3 + 1.5×IQR
-# We use 1.5 which is the most common statistical convention.
+
+MARGIN_WINDOW_PP = 25.0
+
+
 IQR_MULTIPLIER = 1.5
 
 
-# ── Data loading ───────────────────────────────────────────────────────────────
-
 def load_dataset() -> pd.DataFrame:
-    """
-    Load the fully enriched and scored dataset from Phase 2/3.
-    This is our single source of truth for all company metrics.
-    """
+
+
     path = f"{PROCESSED_DIR}/acquirability_scores.parquet"
     df = pd.read_parquet(path)
     return df
 
-
-# ── NEW: Multiple outlier removal ─────────────────────────────────────────────
 
 def remove_multiple_outliers(
         peers: pd.DataFrame,
         multiple_col: str = "ev_to_ebitda",
         iqr_multiplier: float = IQR_MULTIPLIER
 ) -> tuple[pd.DataFrame, list]:
-    """
-    Removes peers whose EV/EBITDA is a statistical outlier using the IQR method.
 
-    How it works:
-      Q1 = 25th percentile of peer multiples
-      Q3 = 75th percentile of peer multiples
-      IQR = Q3 - Q1  (the "middle 50%" spread)
-      Upper fence = Q3 + (iqr_multiplier × IQR)
-      Any peer above the upper fence is an outlier and gets removed.
 
-    Why only an upper fence and not a lower fence?
-    In M&A valuation, a very LOW EV/EBITDA typically means the company
-    is genuinely cheap — that's interesting information we want to keep.
-    A very HIGH EV/EBITDA usually means the market is pricing in exceptional
-    future growth that our target doesn't share — that's the distorting
-    effect we want to remove.
-
-    Returns the cleaned peer DataFrame and a list of tickers that were removed.
-    """
     if multiple_col not in peers.columns or len(peers) < 4:
         return peers, []
 
@@ -132,31 +64,14 @@ def remove_multiple_outliers(
 
     return cleaned_peers, removed_tickers
 
-# ── Step 1: Peer Selection ─────────────────────────────────────────────────────
-
-# ── Step 1: Peer Selection (updated) ──────────────────────────────────────────
 
 def select_peers(
         df: pd.DataFrame,
         target_ticker: str,
         verbose: bool = True
 ) -> tuple[pd.Series, pd.DataFrame, dict]:
-    """
-    Finds the most comparable companies using a multi-dimensional filter.
 
-    Dimension 1 — Sector/sub-industry: same GICS classification
-    Dimension 2 — Size: EV within 0.3x–3x of target EV
-    Dimension 3 — Growth stage: revenue CAGR within ±15 percentage points
-    Dimension 4 — Profitability stage: EBITDA margin within ±25 percentage points
 
-    The growth and margin filters are the key additions that fix the
-    Adobe/Datadog problem. They encode the analyst's judgment that
-    "comparable" means similar business trajectory, not just same label.
-
-    Returns: (target_row, peers_df, selection_metadata_dict)
-    The metadata dict records which filters were applied and how many
-    peers each step found — useful for the dashboard's transparency layer.
-    """
     target_mask = df["ticker"] == target_ticker
     if not target_mask.any():
         raise ValueError(f"Ticker '{target_ticker}' not found in dataset.")
@@ -176,7 +91,7 @@ def select_peers(
         print(f"  Revenue CAGR:  {target_cagr*100:.1f}%" if pd.notna(target_cagr) else "  Revenue CAGR: N/A")
         print(f"  EBITDA margin: {target_margin*100:.1f}%" if pd.notna(target_margin) else "  EBITDA margin: N/A")
 
-    # Remove the target itself from the universe we're searching
+
     universe = df[df["ticker"] != target_ticker].copy()
     metadata = {
         "target_ticker":       target_ticker,
@@ -190,63 +105,45 @@ def select_peers(
         "outliers_removed":    [],
     }
 
-    # ── Filter 1: Sector ───────────────────────────────────────────────────
-    # We always start with sector matching. Cross-sector comparisons are
-    # almost never valid in professional M&A analysis.
+
     sector_universe = universe[universe["sector"] == target_sector]
     metadata["peers_after_sector"] = len(sector_universe)
 
-    # ── Filter 2: Size (EV band) ───────────────────────────────────────────
+
     def apply_size_filter(pool, low, high):
         if pd.notna(target_ev) and target_ev > 0:
             return pool[
                 pool["enterprise_value"].between(target_ev * low, target_ev * high)
             ]
-        return pool  # no EV data → skip size filter
+        return pool
 
-    # Try tight size band first
+
     after_size_tight = apply_size_filter(sector_universe, SIZE_BAND_LOW, SIZE_BAND_HIGH)
     metadata["peers_after_size"] = len(after_size_tight)
 
-    # Use tight if sufficient, otherwise relax
-    after_size = after_size_tight if len(after_size_tight) >= MIN_PEERS else \
+
+    after_size = after_size_tight if len(after_size_tight) >= MIN_PEERS else\
                  apply_size_filter(sector_universe, SIZE_BAND_LOW_RELAXED, SIZE_BAND_HIGH_RELAXED)
 
-    # ── Filter 3: Growth rate similarity ──────────────────────────────────
-    # This is the key fix for the Adobe/Datadog problem.
-    #
-    # Why ±15 percentage points as the window?
-    # A 15pp window means: if Adobe grows at 14%, we accept peers growing
-    # anywhere from -1% to 29%. This includes mature growers (Salesforce at 15%,
-    # Autodesk at 13%) while excluding hyper-growth names (Datadog at 39%).
-    # 15pp is wide enough to give us a reasonable peer set without being so
-    # wide that it becomes meaningless.
-    #
-    # What if we don't have CAGR data for the target?
-    # We skip this filter — it's better to have a broader peer set with
-    # unknown growth similarity than to have no peers at all.
+
     def apply_growth_filter(pool):
         if pd.isna(target_cagr) or "revenue_cagr_5yr" not in pool.columns:
-            return pool  # can't filter without data — skip gracefully
+            return pool
 
-        window = GROWTH_CAGR_WINDOW_PP / 100.0  # convert pp to decimal
+        window = GROWTH_CAGR_WINDOW_PP / 100.0
         cagr_low  = target_cagr - window
         cagr_high = target_cagr + window
         return pool[
             pool["revenue_cagr_5yr"].between(cagr_low, cagr_high) |
-            pool["revenue_cagr_5yr"].isna()  # keep companies with missing CAGR
-                                             # (missing ≠ bad, just unreported)
+            pool["revenue_cagr_5yr"].isna()
+
         ]
 
     after_growth = apply_growth_filter(after_size)
     metadata["peers_after_growth"] = len(after_growth)
     metadata["filters_applied"].append("growth_band")
 
-    # ── Filter 4: EBITDA margin similarity ────────────────────────────────
-    # Filters out companies at a fundamentally different profitability stage.
-    # A company burning cash (2% margin) and a company printing cash (35%
-    # margin) are in different phases of their lifecycle and should not
-    # be valued using the same multiples framework.
+
     def apply_margin_filter(pool):
         if pd.isna(target_margin) or "ebitda_margin" not in pool.columns:
             return pool
@@ -263,25 +160,20 @@ def select_peers(
     metadata["peers_after_margin"] = len(after_margin)
     metadata["filters_applied"].append("margin_band")
 
-    # ── Fallback logic if filters are too tight ────────────────────────────
-    # If the combined filters leave us with too few peers, we relax
-    # progressively — first drop margin filter, then drop growth filter.
-    # We never drop sector — cross-sector comps are never acceptable.
+
     if len(after_margin) < MIN_PEERS:
         if verbose:
             print(f"  ⚠ Only {len(after_margin)} peers after growth+margin filters — "
                   f"relaxing margin filter...")
-        after_margin = after_growth  # drop margin filter, keep growth filter
+        after_margin = after_growth
 
     if len(after_margin) < MIN_PEERS:
         if verbose:
             print(f"  ⚠ Still only {len(after_margin)} peers after relaxing margin — "
                   f"relaxing growth filter too...")
-        after_margin = after_size  # drop both growth and margin, keep sector+size
+        after_margin = after_size
 
-    # ── Sub-industry preference ────────────────────────────────────────────
-    # Within the filtered set, prefer companies in the same sub-industry.
-    # If enough sub-industry peers exist after all filters, use only those.
+
     sub_industry_filtered = after_margin[
         after_margin["sub_industry"] == target_sub_industry
     ]
@@ -292,17 +184,14 @@ def select_peers(
         working_peers = after_margin
         metadata["match_level"] = "sector + growth/margin filtered"
 
-    # ── IQR outlier removal on EV/EBITDA multiples ────────────────────────
-    # After all peer filters, do a final pass to remove any company whose
-    # EV/EBITDA multiple is statistically extreme relative to the rest of
-    # the peer group. This is the last-resort catch for data anomalies.
+
     working_peers, outliers_removed = remove_multiple_outliers(
         working_peers, multiple_col="ev_to_ebitda"
     )
     metadata["outliers_removed"]    = outliers_removed
     metadata["peers_after_outlier"] = len(working_peers)
 
-    # ── Sort by EV proximity to target ────────────────────────────────────
+
     if pd.notna(target_ev) and "enterprise_value" in working_peers.columns:
         working_peers = working_peers.copy()
         working_peers["_ev_distance"] = (
@@ -329,35 +218,9 @@ def select_peers(
     return target, peers, metadata
 
 
-
-
-
-
-
-# ── Step 2: Multiple computation ───────────────────────────────────────────────
-
 def compute_peer_multiples(peers: pd.DataFrame) -> dict:
-    """
-    For the peer group, compute the distribution of each valuation multiple.
 
-    We compute three multiples:
-      EV/EBITDA  — the primary M&A multiple (use for profitable companies)
-      EV/Revenue — the fallback for unprofitable or high-growth companies
-      P/E        — equity-level multiple, for reference only
 
-    For each multiple we report:
-      median  — the central estimate (robust to outliers; preferred over mean)
-      mean    — for reference
-      pct_25  — lower bound of the "normal" range
-      pct_75  — upper bound of the "normal" range
-      min/max — the full observed range
-
-    Why median over mean?
-    If 9 peers trade at 15x EV/EBITDA and 1 peer trades at 150x
-    (perhaps due to a recent earnings collapse), the mean is 28.5x —
-    a number that doesn't represent any actual peer. The median is 15x,
-    which correctly reflects the central tendency.
-    """
     multiples = {}
 
     for multiple_col, label in [
@@ -370,8 +233,7 @@ def compute_peer_multiples(peers: pd.DataFrame) -> dict:
 
         values = peers[multiple_col].dropna()
 
-        # We need at least 3 data points for statistics to be meaningful.
-        # With only 1–2 peers, the "median" is just one company's number.
+
         if len(values) < 3:
             multiples[multiple_col] = {
                 "label":   label,
@@ -382,7 +244,7 @@ def compute_peer_multiples(peers: pd.DataFrame) -> dict:
                 "pct_75":  np.nan,
                 "min":     np.nan,
                 "max":     np.nan,
-                "reliable": False,  # flag: not enough data for confidence
+                "reliable": False,
             }
         else:
             multiples[multiple_col] = {
@@ -400,51 +262,19 @@ def compute_peer_multiples(peers: pd.DataFrame) -> dict:
     return multiples
 
 
-# ── Step 3: Implied Valuation ──────────────────────────────────────────────────
-
 def compute_implied_valuation(
         target: pd.Series,
         multiples: dict,
         ebitda_growth: float = 0.0
 ) -> dict:
-    """
-    Apply peer multiples to the target's own financials to derive
-    an implied enterprise value and implied share price.
 
-    The ebitda_growth parameter is the scenario analysis lever.
-    A value of 0.20 means "assume EBITDA is 20% higher post-acquisition"
-    which models operational improvements an acquirer expects to achieve.
 
-    Step-by-step calculation:
-      1. Take the target's EBITDA and apply the growth assumption
-         Scenario EBITDA = Actual EBITDA × (1 + ebitda_growth)
-
-      2. Multiply by the peer median EV/EBITDA to get Implied EV
-         Implied EV = Peer Median EV/EBITDA × Scenario EBITDA
-
-      3. Subtract Net Debt to get Implied Equity Value
-         Implied Equity = Implied EV - Net Debt
-         (Net Debt = Total Debt - Cash)
-
-      4. Divide by shares outstanding to get Implied Share Price
-         Implied Price = Implied Equity / Shares Outstanding
-
-      5. Compute upside/downside vs current price
-         Upside = (Implied Price / Current Price - 1) × 100%
-
-    Why do we subtract net debt?
-    EV represents the total cost to acquire the WHOLE business (equity +
-    debt - cash). But shareholders only own the equity portion. So to go
-    from "what is the whole business worth" to "what is each share worth",
-    we have to subtract the debt (which belongs to creditors, not equity
-    holders) and add back the cash (which belongs to shareholders).
-    """
     result = {
         "ebitda_growth_assumption": ebitda_growth,
         "scenario_label": f"{ebitda_growth:+.0%} EBITDA growth",
     }
 
-    # ── Base financials ────────────────────────────────────────────────────
+
     actual_ebitda      = target.get("ebitda", np.nan)
     actual_revenue     = target.get("revenue", np.nan)
     net_debt           = target.get("net_debt", np.nan)
@@ -452,9 +282,9 @@ def compute_implied_valuation(
     current_price      = target.get("price", np.nan)
     net_income         = target.get("net_income", np.nan)
 
-    # Apply growth assumption to EBITDA
+
     scenario_ebitda = actual_ebitda * (1 + ebitda_growth) if pd.notna(actual_ebitda) else np.nan
-    scenario_revenue = actual_revenue  # revenue stays the same (we only shock EBITDA)
+    scenario_revenue = actual_revenue
 
     result["actual_ebitda"]    = actual_ebitda
     result["scenario_ebitda"]  = scenario_ebitda
@@ -462,7 +292,7 @@ def compute_implied_valuation(
         f"EBITDA {ebitda_growth:+.0%}" if ebitda_growth != 0 else "Base case"
     )
 
-    # ── EV/EBITDA implied valuation ────────────────────────────────────────
+
     ev_ebitda_stats = multiples.get("ev_to_ebitda", {})
     peer_ev_ebitda_median = ev_ebitda_stats.get("median", np.nan)
     peer_ev_ebitda_p25    = ev_ebitda_stats.get("pct_25", np.nan)
@@ -473,8 +303,7 @@ def compute_implied_valuation(
         implied_ev_low    = peer_ev_ebitda_p25    * scenario_ebitda
         implied_ev_high   = peer_ev_ebitda_p75    * scenario_ebitda
 
-        # Equity value = EV - Net Debt
-        # If net_debt is negative (more cash than debt), this INCREASES equity value
+
         def ev_to_equity(ev):
             if pd.notna(ev) and pd.notna(net_debt):
                 return ev - net_debt
@@ -484,7 +313,7 @@ def compute_implied_valuation(
         implied_equity_low    = ev_to_equity(implied_ev_low)
         implied_equity_high   = ev_to_equity(implied_ev_high)
 
-        # Per-share value
+
         def equity_to_price(equity):
             if pd.notna(equity) and pd.notna(shares_outstanding) and shares_outstanding > 0:
                 return equity / shares_outstanding
@@ -494,7 +323,7 @@ def compute_implied_valuation(
         implied_price_low    = equity_to_price(implied_equity_low)
         implied_price_high   = equity_to_price(implied_equity_high)
 
-        # Upside/downside
+
         def compute_upside(implied_price):
             if pd.notna(implied_price) and pd.notna(current_price) and current_price > 0:
                 return (implied_price / current_price - 1) * 100
@@ -524,7 +353,7 @@ def compute_implied_valuation(
             "ev_ebitda_reliable":     False,
         })
 
-    # ── EV/Revenue implied valuation (fallback / cross-check) ─────────────
+
     ev_revenue_stats = multiples.get("ev_to_revenue", {})
     peer_ev_rev_median = ev_revenue_stats.get("median", np.nan)
 
@@ -551,23 +380,12 @@ def compute_implied_valuation(
     return result
 
 
-# ── Step 4: Scenario Analysis Table ───────────────────────────────────────────
-
 def build_scenario_table(
         target: pd.Series,
         multiples: dict
 ) -> pd.DataFrame:
-    """
-    Builds the full what-if scenario table across all EBITDA growth assumptions.
 
-    This is the table that answers: "what is the implied share price if we
-    buy this company and improve EBITDA by 0%, 10%, 20%, or 30%?"
 
-    Each row is one scenario. The columns show the key valuation outputs
-    for that scenario. This directly replicates the kind of sensitivity
-    table that analysts build manually in Excel — but we generate it
-    automatically for any company.
-    """
     rows = []
     for growth in EBITDA_GROWTH_SCENARIOS:
         valuation = compute_implied_valuation(target, multiples, ebitda_growth=growth)
@@ -590,44 +408,29 @@ def build_scenario_table(
     return pd.DataFrame(rows)
 
 
-# ── Full comps runner (the main callable) ──────────────────────────────────────
-
 def run_comps(
         ticker: str,
         df: pd.DataFrame = None,
         verbose: bool = True
 ) -> dict:
-    """
-    The single entry point for the comps engine.
-    Called by the Streamlit dashboard with a ticker string.
-    Returns a dictionary containing everything needed to render
-    the full comps analysis for that company.
 
-    The return dict has these keys:
-      "target"         → pd.Series  — the target company's full row
-      "peers"          → pd.DataFrame — the peer group
-      "metadata"       → dict — peer selection filter counts/details
-      "multiples"      → dict — peer median multiples with full stats
-      "base_valuation" → dict — implied valuation at 0% EBITDA growth
-      "scenario_table" → pd.DataFrame — full what-if scenario table
-      "peer_table"     → pd.DataFrame — clean comps table for display
-    """
+
     if df is None:
         df = load_dataset()
 
-    # Step 1: Find peers
+
     target, peers, metadata = select_peers(df, ticker, verbose=verbose)
 
-    # Step 2: Compute multiples from peers
+
     multiples = compute_peer_multiples(peers)
 
-    # Step 3: Base-case valuation (no EBITDA growth)
+
     base_valuation = compute_implied_valuation(target, multiples, ebitda_growth=0.0)
 
-    # Step 4: Full scenario table
+
     scenario_table = build_scenario_table(target, multiples)
 
-    # Step 5: Build a clean peer display table (just the columns we want to show)
+
     peer_display_cols = [
         "ticker", "company_name", "sub_industry",
         "ev_bn", "ev_to_ebitda", "ev_to_revenue",
@@ -648,14 +451,9 @@ def run_comps(
     }
 
 
-# ── Pretty printer for terminal output ────────────────────────────────────────
-
 def print_comps_report(ticker: str, results: dict):
-    """
-    Renders a human-readable comps report in the terminal.
-    This is a debug/exploration tool — the actual dashboard
-    will render this data visually in Streamlit.
-    """
+
+
     target = results["target"]
     multiples = results["multiples"]
     base_val = results["base_valuation"]
@@ -731,20 +529,12 @@ def print_comps_report(ticker: str, results: dict):
     print(f"\n{'═'*65}\n")
 
 
-# ── Batch runner (demonstrates the engine across multiple companies) ───────────
-
 def run_batch_demo(
         tickers: list,
         df: pd.DataFrame = None
 ) -> pd.DataFrame:
-    """
-    Runs the comps engine for a list of tickers and collects
-    the base-case implied valuation into a summary DataFrame.
 
-    This is used to validate the engine across multiple companies
-    before building the full dashboard. Run it on 10–20 companies
-    to spot-check whether the implied valuations look reasonable.
-    """
+
     if df is None:
         df = load_dataset()
 
@@ -778,31 +568,28 @@ def run_batch_demo(
     return pd.DataFrame(summary_rows)
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    # Load dataset once and reuse across all calls
+
     df = load_dataset()
 
-    # --- Demo 1: single company deep-dive ---
-    # Change this ticker to any S&P 500 company you want to analyse
+
     demo_ticker = "ADBE"
     results = run_comps(demo_ticker, df=df)
     print_comps_report(demo_ticker, results)
 
-    # --- Demo 2: batch validation across a mix of sectors ---
+
     print("\nRunning batch validation across 10 companies...\n")
     demo_tickers = [
-        "AAPL",   # Tech — large cap, trades at premium
-        "ACN",    # Tech — consulting, should look cheap vs peers
-        "JNJ",    # Healthcare — defensive, mature
-        "PG",     # Consumer Staples — slow growth, high quality
-        "XOM",    # Energy — cyclical, capital intensive
-        "JPM",    # Financials — EV/EBITDA unreliable, expect warning
-        "AMT",    # Real Estate — high EV multiples typical
-        "CAT",    # Industrials — mid-cycle company
-        "ADBE",   # Tech — high margin software
-        "PEP",     # Consumer Staples — iconic brand
+        "AAPL",
+        "ACN",
+        "JNJ",
+        "PG",
+        "XOM",
+        "JPM",
+        "AMT",
+        "CAT",
+        "ADBE",
+        "PEP",
     ]
     summary = run_batch_demo(demo_tickers, df=df)
 
@@ -812,7 +599,7 @@ if __name__ == "__main__":
         "peer_median_ev_ebitda", "implied_price", "upside_pct", "n_peers"
     ]].to_string(index=False))
 
-    # Save batch summary for reference
+
     os.makedirs(PROCESSED_DIR, exist_ok=True)
     summary.to_csv(f"{PROCESSED_DIR}/comps_batch_demo.csv", index=False)
     print(f"\nSaved batch summary → {PROCESSED_DIR}/comps_batch_demo.csv")

@@ -1,18 +1,3 @@
-# pages/2_Company_Deep_Dive.py
-# ─────────────────────────────────────────────────────────
-# The analyst's working page.
-# Given a ticker, shows:
-#   1. Company snapshot card
-#   2. Acquirability score breakdown (6-signal bar chart)
-#   3. Peer comps table (with core / extended toggle)
-#   4. Implied valuation — football field chart
-#   5. Scenario analysis table (what-if EBITDA growth)
-#
-# The core/extended peer toggle is the key analytical
-# feature — it lets the user see what changes when you
-# include AI-premium, high-narrative companies in the comp set.
-# ─────────────────────────────────────────────────────────
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -23,7 +8,7 @@ import sys, os
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from app import load_full_dataset, TIER_COLORS
 
-# Import the extended-aware comps engine — this powers the Core/Extended toggle.
+
 from comps_engine_2 import run_comps
 
 st.title("🔍 Company Deep Dive")
@@ -32,11 +17,10 @@ st.markdown(
     "implied valuation, and post-acquisition scenario modelling."
 )
 
-# ── Company selector ───────────────────────────────────────────────────────────
+
 df = load_full_dataset()
 
-# Build a display list: "AAPL — Apple Inc. (Information Technology)"
-# Sorting alphabetically by ticker makes it easy to find companies
+
 ticker_options = sorted(df["ticker"].dropna().unique().tolist())
 company_names  = df.set_index("ticker")["company_name"].to_dict()
 
@@ -48,10 +32,6 @@ selected_ticker = st.selectbox(
     help="Type to search by ticker or company name"
 )
 
-# ── Core / Extended peer set toggle ───────────────────────────────────────────
-# This is the key analytical feature explained in the project narrative.
-# We display it prominently right below the company selector so users
-# immediately understand it's a first-class analytical choice.
 
 st.divider()
 col_toggle, col_explainer = st.columns([1, 3])
@@ -83,13 +63,10 @@ with col_explainer:
 
 use_extended = (peer_mode == "Extended Peer Set")
 
-# ── Run the comps engine ───────────────────────────────────────────────────────
-# We cache the comps result keyed on (ticker, peer_mode) so switching between
-# core and extended doesn't re-run the engine unnecessarily.
 
 @st.cache_data(ttl=3600, show_spinner="Running comps analysis...")
 def get_comps(ticker: str, extended: bool) -> dict:
-    """Cached wrapper around run_comps so the engine only re-runs when inputs change."""
+
     return run_comps(ticker, verbose=False, use_extended_peers=extended)
 
 with st.spinner(f"Analysing {selected_ticker}..."):
@@ -107,7 +84,7 @@ with st.spinner(f"Analysing {selected_ticker}..."):
 
 st.divider()
 
-# ── Target snapshot ────────────────────────────────────────────────────────────
+
 tier        = target.get("score_tier", "Unrated")
 tier_color  = TIER_COLORS.get(tier, "#6B7280")
 score       = target.get("acquirability_score", np.nan)
@@ -123,16 +100,16 @@ st.markdown(
     f"{int(sector_size) if pd.notna(sector_size) else 'N/A'}** in sector"
 )
 
-# Tier badge
+
 st.markdown(
     f'<span style="background:{tier_color};color:white;padding:4px 12px;'
     f'border-radius:6px;font-size:14px;font-weight:700;">{tier} — {score:.1f}/100</span>',
     unsafe_allow_html=True,
 )
 
-st.markdown("")  # spacer
+st.markdown("")
 
-# Snapshot metrics in a 6-column row
+
 s1, s2, s3, s4, s5, s6 = st.columns(6)
 with s1:
     st.metric("EV", f"${target.get('ev_bn', np.nan):.1f}B")
@@ -152,7 +129,7 @@ if target.get("data_quality_warning"):
 
 st.divider()
 
-# ── Two-column layout: score breakdown + comps table ──────────────────────────
+
 left_col, right_col = st.columns([1, 1.6])
 
 with left_col:
@@ -162,7 +139,7 @@ with left_col:
         "Length = weight × percentile rank within sector."
     )
 
-    # Build the signal breakdown chart from the contribution columns
+
     signal_labels = {
         "ev_to_ebitda_contribution":      "Valuation (EV/EBITDA)",
         "revenue_cagr_5yr_contribution":  "Growth (Rev CAGR)",
@@ -193,7 +170,7 @@ with left_col:
             textposition="outside",
         ))
         fig_signals.add_vline(
-            x=score / 6,  # average contribution if perfectly balanced
+            x=score / 6,
             line_dash="dot",
             line_color="gray",
             annotation_text="avg",
@@ -213,7 +190,7 @@ with left_col:
 with right_col:
     st.subheader(f"Peer Group ({len(peer_table)} companies)")
 
-    # Show which peers were excluded by the sector cap filter
+
     if metadata.get("sector_cap_removed") and not use_extended:
         removed = ", ".join(metadata["sector_cap_removed"])
         st.caption(
@@ -224,7 +201,7 @@ with right_col:
     if not peer_table.empty:
         peer_display = peer_table.copy()
 
-        # Rename for display
+
         col_map = {
             "ticker":            "Ticker",
             "company_name":      "Company",
@@ -252,7 +229,7 @@ with right_col:
             hide_index=True,
         )
 
-        # Peer multiple summary beneath the table
+
         pm_cols = st.columns(3)
         for i, (key, stats) in enumerate(multiples.items()):
             if i >= 3:
@@ -270,7 +247,7 @@ with right_col:
 
 st.divider()
 
-# ── Football field chart — implied valuation range ────────────────────────────
+
 st.subheader("Implied Valuation — Football Field")
 st.caption(
     "Each bar shows the implied share price range (P25 to P75 peer multiple) "
@@ -280,7 +257,7 @@ st.caption(
 current_price = base_val.get("current_price", np.nan)
 football_data = []
 
-# EV/EBITDA range
+
 ev_low   = base_val.get("implied_price_low",   np.nan)
 ev_med   = base_val.get("implied_price_median", np.nan)
 ev_high  = base_val.get("implied_price_high",   np.nan)
@@ -292,12 +269,12 @@ if pd.notna(ev_low) and pd.notna(ev_high):
         "High":   ev_high,
     })
 
-# EV/Revenue range
+
 rev_low  = base_val.get("implied_price_rev", np.nan)
 if pd.notna(rev_low):
     football_data.append({
         "Method": "EV/Revenue comps",
-        "Low":    rev_low * 0.85,   # approximate range using ±15% of point estimate
+        "Low":    rev_low * 0.85,
         "Median": rev_low,
         "High":   rev_low * 1.15,
     })
@@ -307,7 +284,7 @@ if football_data:
 
     fig_ff = go.Figure()
     for _, row in ff_df.iterrows():
-        # Range bar (low to high)
+
         fig_ff.add_trace(go.Bar(
             name=row["Method"],
             y=[row["Method"]],
@@ -318,7 +295,7 @@ if football_data:
             opacity=0.4,
             showlegend=False,
         ))
-        # Median point
+
         fig_ff.add_trace(go.Scatter(
             name=f"{row['Method']} median",
             y=[row["Method"]],
@@ -329,7 +306,7 @@ if football_data:
             showlegend=False,
         ))
 
-    # Current price line
+
     if pd.notna(current_price):
         fig_ff.add_vline(
             x=current_price,
@@ -354,7 +331,7 @@ else:
 
 st.divider()
 
-# ── Scenario analysis ──────────────────────────────────────────────────────────
+
 st.subheader("Post-Acquisition Scenario Analysis")
 st.caption(
     "What is this company worth if the acquirer improves EBITDA by X% "
@@ -362,7 +339,7 @@ st.caption(
 )
 
 if not scenario_table.empty:
-    # Scenario table
+
     scenario_display = scenario_table[[
         "scenario", "scenario_ebitda_bn",
         "implied_ev_low_bn", "implied_ev_median_bn", "implied_ev_high_bn",
@@ -389,7 +366,7 @@ if not scenario_table.empty:
         hide_index=True,
     )
 
-    # Scenario bar chart — implied price by scenario
+
     fig_scenario = px.bar(
         scenario_table,
         x="scenario",

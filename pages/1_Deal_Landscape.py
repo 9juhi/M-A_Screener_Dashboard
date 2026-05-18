@@ -1,18 +1,3 @@
-# pages/1_Deal_Universe.py
-# ─────────────────────────────────────────────────────────
-# The Deal Universe page — the strategic overview.
-#
-# What an MD would use this page for:
-#   "Show me the most attractive acquisition targets in
-#    Healthcare with an EV under $50B."
-#
-# Layout:
-#   Sidebar  → filters (sector, size, score tier, min score)
-#   Top row  → 4 KPI cards reflecting filtered universe
-#   Middle   → sector × tier heatmap
-#   Bottom   → ranked leaderboard table
-# ─────────────────────────────────────────────────────────
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -29,16 +14,13 @@ st.markdown(
     "attractive acquisition targets based on the Acquirability Score."
 )
 
-# ── Load data ──────────────────────────────────────────────────────────────────
+
 df = load_leaderboard()
 
-# ── Sidebar filters ────────────────────────────────────────────────────────────
-# All filters live in the sidebar so they don't consume main-area space.
-# Every filter widget returns a value that we use to slice the DataFrame.
 
 st.sidebar.header("🔧 Filters")
 
-# Sector filter — multiselect so you can compare 2-3 sectors at once
+
 all_sectors = sorted(df["sector"].dropna().unique().tolist())
 selected_sectors = st.sidebar.multiselect(
     "Sector",
@@ -47,7 +29,7 @@ selected_sectors = st.sidebar.multiselect(
     help="Filter to specific GICS sectors"
 )
 
-# Score tier filter
+
 all_tiers = ["S-tier", "A-tier", "B-tier", "C-tier", "D-tier"]
 selected_tiers = st.sidebar.multiselect(
     "Score Tier",
@@ -56,8 +38,7 @@ selected_tiers = st.sidebar.multiselect(
     help="S-tier = top 20% acquirability score"
 )
 
-# EV size filter — slider for the EV range in billions
-# We clamp the slider range to the actual data range
+
 ev_col = "ev_bn"
 if ev_col in df.columns:
     ev_min = float(df[ev_col].dropna().quantile(0.05))
@@ -72,7 +53,7 @@ if ev_col in df.columns:
 else:
     ev_range = (0, 9999)
 
-# Minimum acquirability score
+
 min_score = st.sidebar.slider(
     "Min Acquirability Score",
     min_value=0,
@@ -82,14 +63,14 @@ min_score = st.sidebar.slider(
     help="Only show companies scoring above this threshold"
 )
 
-# Data quality filter
+
 show_imputed = st.sidebar.checkbox(
     "Include companies with imputed data",
     value=True,
     help="Uncheck to show only companies with fully complete financial data"
 )
 
-# ── Apply filters ──────────────────────────────────────────────────────────────
+
 filtered = df.copy()
 
 if selected_sectors:
@@ -109,7 +90,7 @@ filtered = filtered[filtered["acquirability_score"] >= min_score]
 if not show_imputed and "imputed_fields" in filtered.columns:
     filtered = filtered[filtered["imputed_fields"] == ""]
 
-# ── KPI summary row ────────────────────────────────────────────────────────────
+
 st.divider()
 k1, k2, k3, k4 = st.columns(4)
 
@@ -132,11 +113,6 @@ with k4:
 
 st.divider()
 
-# ── Sector × Tier heatmap ──────────────────────────────────────────────────────
-# The heatmap shows, for each sector (rows) and tier (columns), how many
-# companies fall in that cell. Dark colour = more targets concentrated there.
-# An MD glancing at this immediately knows which sectors are richest in
-# high-quality acquisition candidates.
 
 st.subheader("Deal Universe Heatmap — Targets by Sector × Score Tier")
 st.caption(
@@ -172,7 +148,7 @@ st.plotly_chart(fig_heatmap, use_container_width=True)
 
 st.divider()
 
-# ── Score distribution by sector ──────────────────────────────────────────────
+
 st.subheader("Acquirability Score Distribution by Sector")
 st.caption(
     "Box plot showing the spread of scores within each sector. "
@@ -199,7 +175,7 @@ st.plotly_chart(fig_box, use_container_width=True)
 
 st.divider()
 
-# ── Leaderboard table ──────────────────────────────────────────────────────────
+
 st.subheader(f"Ranked Leaderboard — {len(filtered)} companies")
 st.caption(
     "Sorted by Acquirability Score descending. "
@@ -207,7 +183,7 @@ st.caption(
     "Use the filters in the sidebar to narrow the view."
 )
 
-# Select and rename columns for clean display
+
 table_cols = {
     "global_rank":        "Rank",
     "ticker":             "Ticker",
@@ -230,7 +206,7 @@ display_df = (
     .reset_index(drop=True)
 )
 
-# Apply colour coding to the Tier column using Streamlit's column config
+
 st.dataframe(
     display_df,
     use_container_width=True,
@@ -246,7 +222,7 @@ st.dataframe(
     hide_index=True,
 )
 
-# Download button — analysts always want to export to Excel
+
 csv = display_df.to_csv(index=False)
 st.download_button(
     label="⬇ Download filtered results as CSV",

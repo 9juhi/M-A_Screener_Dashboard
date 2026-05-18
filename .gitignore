@@ -1,0 +1,8 @@
+.DS_Store
+.env
+.venv/
+.venv-1/
+__pycache__/
+*.py[cod]
+.pycache_compile/
+clean_python/

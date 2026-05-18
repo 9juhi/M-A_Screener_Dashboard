@@ -1,12 +1,3 @@
-# build_dataset.py
-# ─────────────────────────────────────────────────────────
-# Merges sp500 list + market data + financials into one
-# clean master dataset. This is the single source of truth
-# that all future phases read from.
-#
-# Output: data/processed/master_dataset.parquet
-# ─────────────────────────────────────────────────────────
-
 import pandas as pd
 import numpy as np
 import os
@@ -46,7 +37,7 @@ FINANCIAL_COLUMNS = [
 
 
 def safe_divide(numerator, denominator):
-    """Divide while returning NaN for missing or zero denominators."""
+
     denominator = denominator.replace(0, np.nan)
     return numerator / denominator
 
@@ -63,8 +54,7 @@ def load_market_data() -> pd.DataFrame:
     market = pd.read_csv(MARKET_DATA_PATH)
     market = ensure_columns(market, MARKET_COLUMNS)
 
-    # Only keep yfinance market snapshot fields here. Statement data belongs
-    # in financials.csv, and valuation ratios are calculated after the merge.
+
     market = market[MARKET_COLUMNS]
     market = market[market["price"].notna()]
     market = market.drop_duplicates(subset=["ticker"], keep="last")
@@ -112,17 +102,16 @@ def build_master_dataset():
     print(f"  Market data:   {len(market)} companies")
     print(f"  Financials:    {len(financials)} companies")
 
-    # Merge: start with sp500 as the base (all 500 companies)
-    # Left join means we keep all 500 even if some data is missing
+
     df = sp500.merge(market,     on="ticker", how="left")
     df = df.merge(financials,    on="ticker", how="left")
     df = add_calculated_metrics(df)
 
     print(f"\nMerged dataset: {len(df)} rows × {len(df.columns)} columns")
 
-    # ── Data quality checks ──────────────────────────────
+
     print("\nData quality report:")
-    
+
     key_cols = ["price", "market_cap", "total_debt", "cash_and_equivalents",
                 "revenue", "ebitda", "ebit", "net_income", "free_cash_flow",
                 "enterprise_value", "ev_to_ebitda"]
@@ -133,24 +122,17 @@ def build_master_dataset():
             pct     = missing / len(df) * 100
             print(f"  {col:<28} missing: {missing:>3} ({pct:.1f}%)")
 
-    # Flag companies where key data is missing
-    # Phase 2 will decide how to handle these (imputation vs drop)
+
     df["data_complete"] = (
         df["market_cap"].notna() &
         df["revenue"].notna() &
         df["ebitda"].notna()
     )
-    
+
     complete = df["data_complete"].sum()
     print(f"\nCompanies with complete core data: {complete}/{len(df)}")
 
-    # ── Save to Parquet ──────────────────────────────────
-    # Why Parquet over CSV?
-    # - Stores data types properly (no re-parsing floats from strings)
-    # - ~5x smaller file size
-    # - ~10x faster to read for column-based queries
-    # - Perfect for the kind of "give me all revenue values" queries we'll do
-    
+
     os.makedirs(PROCESSED_DIR, exist_ok=True)
     df.to_parquet(OUTPUT_PATH, index=False)
 

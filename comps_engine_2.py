@@ -1,95 +1,45 @@
-# comps_engine.py  (Phase 4 — updated with growth-aware peer selection)
-# ─────────────────────────────────────────────────────────
-# Key changes from v1:
-#   1. select_peers() now filters by growth rate similarity
-#      and profitability stage — not just sector + size
-#   2. New remove_multiple_outliers() function strips extreme
-#      multiples from the peer group using the IQR method
-#   3. print_comps_report() now shows which peers were excluded
-#      and why, for transparency
-# ─────────────────────────────────────────────────────────
-
 import pandas as pd
 import numpy as np
 import os
 from config import PROCESSED_DIR
 
 
-# ── Constants ──────────────────────────────────────────────────────────────────
-
 MIN_PEERS = 5
 MAX_PEERS = 12
 
-# EV size bands (same as before)
+
 SIZE_BAND_LOW  = 0.3
 SIZE_BAND_HIGH = 3.0
 SIZE_BAND_LOW_RELAXED  = 0.1
 SIZE_BAND_HIGH_RELAXED = 10.0
 
-# NEW: Sector median anchor for multiple filtering.
-# Peers trading at more than this multiple of the sector median EV/EBITDA
-# are excluded — they're priced on exceptional company-specific narratives
-# (AI re-rating, market leadership premium) that don't transfer to the target.
-# 2.0x means: if sector median is 34x, exclude peers above 68x.
+
 SECTOR_MEDIAN_MULTIPLE_CAP = 2.0
 
 
-# NEW: Growth rate filter
-# A peer's 5-year revenue CAGR must be within this many percentage points
-# of the target's CAGR to be considered "comparable growth stage."
-# Example: target CAGR = 14%, window = 15pp → peers must be between -1% and 29%
-# This directly excludes hyper-growth companies (Datadog at 39%) from
-# being compared to mature growers (Adobe at 14%).
-GROWTH_CAGR_WINDOW_PP = 15.0   # percentage points, not decimal
+GROWTH_CAGR_WINDOW_PP = 15.0
 
-# NEW: EBITDA margin filter
-# A peer's EBITDA margin must be within this many percentage points
-# of the target's margin to be considered "same profitability stage."
-# Example: target margin = 35%, window = 25pp → peers must be between 10% and 60%
-# This excludes early-stage companies burning cash from mature company comps.
-MARGIN_WINDOW_PP = 25.0        # percentage points
 
-# NEW: IQR multiplier for outlier removal on multiples.
-# Standard box-plot definition: outlier > Q3 + 1.5×IQR
-# We use 1.5 which is the most common statistical convention.
+MARGIN_WINDOW_PP = 25.0
+
+
 IQR_MULTIPLIER = 1.5
 
 EBITDA_GROWTH_SCENARIOS = [-0.10, 0.00, 0.10, 0.20, 0.30]
 
-
-# ── Data loading ───────────────────────────────────────────────────────────────
 
 def load_dataset() -> pd.DataFrame:
     path = f"{PROCESSED_DIR}/acquirability_scores.parquet"
     return pd.read_parquet(path)
 
 
-# ── NEW: Multiple outlier removal ─────────────────────────────────────────────
-
 def remove_multiple_outliers(
         peers: pd.DataFrame,
         multiple_col: str = "ev_to_ebitda",
         iqr_multiplier: float = IQR_MULTIPLIER
 ) -> tuple[pd.DataFrame, list]:
-    """
-    Removes peers whose EV/EBITDA is a statistical outlier using the IQR method.
 
-    How it works:
-      Q1 = 25th percentile of peer multiples
-      Q3 = 75th percentile of peer multiples
-      IQR = Q3 - Q1  (the "middle 50%" spread)
-      Upper fence = Q3 + (iqr_multiplier × IQR)
-      Any peer above the upper fence is an outlier and gets removed.
 
-    Why only an upper fence and not a lower fence?
-    In M&A valuation, a very LOW EV/EBITDA typically means the company
-    is genuinely cheap — that's interesting information we want to keep.
-    A very HIGH EV/EBITDA usually means the market is pricing in exceptional
-    future growth that our target doesn't share — that's the distorting
-    effect we want to remove.
-
-    Returns the cleaned peer DataFrame and a list of tickers that were removed.
-    """
     if multiple_col not in peers.columns or len(peers) < 4:
         return peers, []
 
@@ -108,7 +58,6 @@ def remove_multiple_outliers(
 
     return cleaned_peers, removed_tickers
 
-# ---- sector wise multiple cap function ----
 
 def apply_sector_multiple_cap(
         peers: pd.DataFrame,
@@ -117,37 +66,18 @@ def apply_sector_multiple_cap(
         cap_multiplier: float = SECTOR_MEDIAN_MULTIPLE_CAP,
         multiple_col: str = "ev_to_ebitda"
 ) -> tuple[pd.DataFrame, list]:
-    """
-    Removes peers whose EV/EBITDA multiple is more than cap_multiplier times
-    the sector median EV/EBITDA.
 
-    Why use sector median as the anchor rather than the target's own multiple?
-    Using the target's multiple would be circular — we'd be excluding peers
-    because the target is cheap, which assumes the target is correctly valued
-    (which is exactly what we're trying to determine). Instead we use the
-    SECTOR median — what the market considers a "normal" valuation for this
-    industry — as an objective reference point.
 
-    A company trading at 2× the sector median is being priced by the market
-    on exceptional forward expectations specific to that company. Including
-    it in a peer median would incorrectly import those expectations into the
-    target's implied valuation.
-
-    For Information Technology with a sector median of 34x:
-    - Cap = 34 × 2.0 = 68x
-    - CDNS (71.8x) and APP (81.9x) would be excluded
-    - SNPS (68.2x) stays in — borderline but defensible
-    """
     if multiple_col not in peers.columns or benchmarks is None:
         return peers, []
 
-    # Look up this sector's median multiple from our pre-computed benchmarks
+
     sector_row = benchmarks[
         (benchmarks["sector"] == sector) &
         (benchmarks["metric"] == multiple_col)
     ]
     if sector_row.empty:
-        return peers, []   # no benchmark data — skip this filter gracefully
+        return peers, []
 
     sector_median = sector_row.iloc[0]["median"]
     if pd.isna(sector_median) or sector_median <= 0:
@@ -161,20 +91,15 @@ def apply_sector_multiple_cap(
 
     return cleaned_peers, removed_tickers, upper_cap
 
-# ── Step 1: Peer Selection (updated) ──────────────────────────────────────────
 
 def select_peers(
         df: pd.DataFrame,
         target_ticker: str,
-        verbose: bool = True, 
-        use_extended_peers: bool = False 
+        verbose: bool = True,
+        use_extended_peers: bool = False
 ) -> tuple[pd.Series, pd.DataFrame, dict]:
-    """
-    Updated peer selection — now adds a 5th filter:
-    Dimension 5 — Multiple regime: exclude peers trading at >2× sector median
-                  EV/EBITDA (these are AI-premium or narrative-driven stocks
-                  whose multiples reflect company-specific factors)
-    """
+
+
     target_mask = df["ticker"] == target_ticker
     if not target_mask.any():
         raise ValueError(f"Ticker '{target_ticker}' not found in dataset.")
@@ -186,9 +111,7 @@ def select_peers(
     target_cagr         = target.get("revenue_cagr_5yr", np.nan)
     target_margin       = target.get("ebitda_margin", np.nan)
 
-    # Load sector benchmarks for the multiple regime filter
-    # These were computed in Phase 2 and tell us what a "normal"
-    # EV/EBITDA looks like for each sector
+
     try:
         benchmarks = pd.read_parquet(f"{PROCESSED_DIR}/sector_benchmarks.parquet")
     except FileNotFoundError:
@@ -221,11 +144,11 @@ def select_peers(
         "sector_cap_threshold":   None,
     }
 
-    # ── Filter 1: Sector ───────────────────────────────────────────────────
+
     sector_universe = universe[universe["sector"] == target_sector]
     metadata["peers_after_sector"] = len(sector_universe)
 
-    # ── Filter 2: Size ─────────────────────────────────────────────────────
+
     def apply_size_filter(pool, low, high):
         if pd.notna(target_ev) and target_ev > 0:
             return pool[pool["enterprise_value"].between(target_ev * low, target_ev * high)]
@@ -236,7 +159,7 @@ def select_peers(
         after_size = apply_size_filter(sector_universe, SIZE_BAND_LOW_RELAXED, SIZE_BAND_HIGH_RELAXED)
     metadata["peers_after_size"] = len(after_size)
 
-    # ── Filter 3: Growth rate ──────────────────────────────────────────────
+
     def apply_growth_filter(pool):
         if pd.isna(target_cagr) or "revenue_cagr_5yr" not in pool.columns:
             return pool
@@ -249,7 +172,7 @@ def select_peers(
     after_growth = apply_growth_filter(after_size)
     metadata["peers_after_growth"] = len(after_growth)
 
-    # ── Filter 4: Margin stage ─────────────────────────────────────────────
+
     def apply_margin_filter(pool):
         if pd.isna(target_margin) or "ebitda_margin" not in pool.columns:
             return pool
@@ -261,27 +184,23 @@ def select_peers(
 
     after_margin = apply_margin_filter(after_growth)
     if len(after_margin) < MIN_PEERS:
-        after_margin = after_growth   # relax margin filter
+        after_margin = after_growth
     if len(after_margin) < MIN_PEERS:
-        after_margin = after_size     # relax both growth and margin
+        after_margin = after_size
 
     metadata["peers_after_margin"] = len(after_margin)
 
-    # ── Filter 5: Sector multiple regime cap (NEW) ─────────────────────────
-    # Remove peers trading far above the sector median EV/EBITDA.
-    # These are companies that have been individually re-rated by the market
-    # (AI narrative, regulatory tailwind, etc.) and whose premium is
-    # company-specific rather than representative of sector norms.
+
     if benchmarks is not None and not use_extended_peers:
         result = apply_sector_multiple_cap(
             after_margin, target_sector, benchmarks
         )
-        # Function returns 3 values now
+
         after_sector_cap, sector_cap_removed, cap_threshold = result
         metadata["sector_cap_removed"]   = sector_cap_removed
         metadata["sector_cap_threshold"] = cap_threshold
 
-        # Only apply if we still have enough peers after the cap
+
         if len(after_sector_cap) >= MIN_PEERS:
             after_margin = after_sector_cap
         else:
@@ -293,13 +212,13 @@ def select_peers(
 
         metadata["peers_after_sector_cap"] = len(after_margin)
     else:
-        # Extended peers mode — sector cap is intentionally bypassed
+
         metadata["peers_after_sector_cap"] = len(after_margin)
         metadata["sector_cap_removed"]     = []
         if use_extended_peers and verbose:
             print("  ℹ Extended peer set mode — sector multiple cap bypassed")
 
-    # ── Sub-industry preference ────────────────────────────────────────────
+
     sub_industry_filtered = after_margin[
         after_margin["sub_industry"] == target_sub_industry
     ]
@@ -310,14 +229,14 @@ def select_peers(
         working_peers = after_margin
         metadata["match_level"] = "sector + all filters"
 
-    # ── IQR outlier removal ────────────────────────────────────────────────
+
     working_peers, iqr_removed = remove_multiple_outliers(
         working_peers, multiple_col="ev_to_ebitda"
     )
     metadata["outliers_removed"]    = iqr_removed
     metadata["peers_after_outlier"] = len(working_peers)
 
-    # ── Sort by EV proximity ───────────────────────────────────────────────
+
     if pd.notna(target_ev) and "enterprise_value" in working_peers.columns:
         working_peers = working_peers.copy()
         working_peers["_ev_dist"] = (working_peers["enterprise_value"] - target_ev).abs()
@@ -345,21 +264,13 @@ def select_peers(
     return target, peers, metadata
 
 
-
-# ── Step 3: Implied Valuation ──────────────────────────────────────────────────
-
 def compute_implied_valuation(
         target: pd.Series,
         multiples: dict,
         ebitda_growth: float = 0.0
 ) -> dict:
-    """
-    Applies peer median multiples to target financials to derive
-    implied EV and implied share price.
 
-    ebitda_growth = 0.20 means "assume EBITDA is 20% higher post-acquisition."
-    This is the what-if scenario lever.
-    """
+
     result = {
         "ebitda_growth_assumption": ebitda_growth,
         "scenario_label": f"EBITDA {ebitda_growth:+.0%}" if ebitda_growth != 0 else "Base case",
@@ -372,12 +283,12 @@ def compute_implied_valuation(
     current_price      = target.get("price", np.nan)
 
     scenario_ebitda  = actual_ebitda  * (1 + ebitda_growth) if pd.notna(actual_ebitda)  else np.nan
-    scenario_revenue = actual_revenue  # only EBITDA is shocked in the scenario
+    scenario_revenue = actual_revenue
 
     result["actual_ebitda"]   = actual_ebitda
     result["scenario_ebitda"] = scenario_ebitda
 
-    # ── EV/EBITDA valuation ────────────────────────────────────────────────
+
     ev_stats = multiples.get("ev_to_ebitda", {})
     p_median = ev_stats.get("median", np.nan)
     p_p25    = ev_stats.get("pct_25",  np.nan)
@@ -422,7 +333,7 @@ def compute_implied_valuation(
             "ev_ebitda_reliable":    False,
         })
 
-    # ── EV/Revenue fallback valuation ──────────────────────────────────────
+
     ev_rev_stats   = multiples.get("ev_to_revenue", {})
     p_rev_median   = ev_rev_stats.get("median", np.nan)
 
@@ -449,12 +360,9 @@ def compute_implied_valuation(
     return result
 
 
-# ── Step 2: Multiple computation ───────────────────────────────────────────────
-
 def compute_peer_multiples(peers: pd.DataFrame) -> dict:
-    """
-    Compute peer-group multiple statistics used by implied valuation.
-    """
+
+
     multiples = {}
 
     for multiple_col, label in [
@@ -495,8 +403,6 @@ def compute_peer_multiples(peers: pd.DataFrame) -> dict:
     return multiples
 
 
-# ── Step 4: Scenario table ─────────────────────────────────────────────────────
-
 def build_scenario_table(target: pd.Series, multiples: dict) -> pd.DataFrame:
     rows = []
     for growth in EBITDA_GROWTH_SCENARIOS:
@@ -519,30 +425,14 @@ def build_scenario_table(target: pd.Series, multiples: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# ── Full comps runner ──────────────────────────────────────────────────────────
-
 def run_comps(
         ticker: str,
         df: pd.DataFrame = None,
-        verbose: bool = True, 
+        verbose: bool = True,
         use_extended_peers: bool = False
 ) -> dict:
-    """
-    Single entry point for the comps engine — called by the dashboard.
-    Returns everything needed to render a full comps analysis.
 
 
-    use_extended_peers=True bypasses the sector median multiple cap,
-    including AI-premium and high-narrative peers in the comparison.
-    This produces a wider valuation range that reflects where the
-    market currently prices the most expensive companies in the sector,
-    rather than the central tendency.
-
-    In the dashboard this is exposed as a toggle labelled
-    "Core Peers" vs "Extended Peer Set" so the user can see both views.
-
-
-    """
     if df is None:
         df = load_dataset()
 
@@ -568,11 +458,9 @@ def run_comps(
         "base_valuation":  base_valuation,
         "scenario_table":  scenario_table,
         "metadata":        metadata,
-        "extended_peers": use_extended_peers,  # pass back so dashboard can label it
+        "extended_peers": use_extended_peers,
     }
 
-
-# ── Pretty printer ─────────────────────────────────────────────────────────────
 
 def print_comps_report(ticker: str, results: dict):
     target         = results["target"]
@@ -656,8 +544,6 @@ def print_comps_report(ticker: str, results: dict):
     print(f"\n{'═'*65}\n")
 
 
-# ── Batch runner ───────────────────────────────────────────────────────────────
-
 def run_batch_demo(tickers: list, df: pd.DataFrame = None) -> pd.DataFrame:
     if df is None:
         df = load_dataset()
@@ -686,8 +572,6 @@ def run_batch_demo(tickers: list, df: pd.DataFrame = None) -> pd.DataFrame:
             print(f"  ✗ {ticker:<6} FAILED: {e}")
     return pd.DataFrame(rows)
 
-
-# ── Main ───────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     df = load_dataset()

@@ -1,23 +1,8 @@
-# fetch_market_data.py
-# ─────────────────────────────────────────────────────────
-# For each S&P 500 company, pulls from yfinance:
-#   - Current share price
-#   - market cap 
-#   - Shares outstanding
-#   - 52-week high/low (for context)
-#
-# Why yfinance for this and not SimFin?
-# yfinance gives LIVE market prices. SimFin gives financial
-# statements. We need both. This file handles the market side.
-#
-# Output: data/raw/market_data.csv
-# ─────────────────────────────────────────────────────────
-
 import yfinance as yf
 import pandas as pd
 import time
 import os
-from tqdm import tqdm        # progress bar in terminal
+from tqdm import tqdm
 from config import RAW_DIR, BATCH_SIZE, BATCH_SLEEP
 
 OUTPUT_PATH = f"{RAW_DIR}/market_data.csv"
@@ -28,7 +13,7 @@ CONSECUTIVE_FAILURE_LIMIT = 3
 
 
 def get_fast_info_value(fast_info, *names):
-    """Read a value from yfinance fast_info across dict/property variants."""
+
     for name in names:
         try:
             if isinstance(fast_info, dict) and name in fast_info:
@@ -44,10 +29,8 @@ def get_fast_info_value(fast_info, *names):
 
 
 def fetch_ticker_data(ticker: str) -> dict:
-    """
-    Fetch market data for a single ticker.
-    Returns a dict of values, or None if the fetch fails.
-    """
+
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             stock = yf.Ticker(ticker)
@@ -67,8 +50,7 @@ def fetch_ticker_data(ticker: str) -> dict:
             if close.empty:
                 raise ValueError("No close price returned")
 
-            # fast_info uses lighter Yahoo endpoints than .info.
-            # If Yahoo blocks it, keep price data and leave these fields blank.
+
             try:
                 fast_info = stock.fast_info
             except Exception:
@@ -94,16 +76,14 @@ def fetch_ticker_data(ticker: str) -> dict:
                 time.sleep(wait_seconds)
                 continue
 
-            # If a ticker fails (delisted, API issue), log it and move on.
-            # We never want one bad ticker to crash the whole pipeline.
+
             print(f"  FAILED: {ticker} — {e}")
             return None
 
 
 def fetch_all_market_data(tickers: list) -> pd.DataFrame:
-    """
-    Fetch market prices, return combined DataFrame.
-    """
+
+
     results = []
     failed  = []
     consecutive_failures = 0
@@ -137,7 +117,7 @@ def fetch_all_market_data(tickers: list) -> pd.DataFrame:
 
     df = pd.DataFrame(results)
 
-    # Save failed tickers to retry or flag
+
     if failed:
         failed_df = pd.DataFrame({"ticker": failed})
         failed_df.to_csv(FAILED_PATH, index=False)

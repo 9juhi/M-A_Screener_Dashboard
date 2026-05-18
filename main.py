@@ -1,8 +1,3 @@
-# main.py
-# ─────────────────────────────────────────────────────────
-# Full pipeline orchestrator — all phases.
-# ─────────────────────────────────────────────────────────
-
 import os
 from config import RAW_DIR, PROCESSED_DIR
 
@@ -49,5 +44,5 @@ def run_phase3():
 
 
 if __name__ == "__main__":
-    # Phases 1 and 2 already complete — run Phase 3 only
+
     run_phase3()

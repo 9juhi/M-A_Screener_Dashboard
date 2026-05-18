@@ -1,14 +1,3 @@
-# pages/3_Sector_Benchmarks.py
-# ─────────────────────────────────────────────────────────
-# The Sector Benchmarks page — contextual reference layer.
-#
-# Answers: "what is a normal valuation for a company
-# in this sector?" before you interpret the comps output.
-#
-# Shows: median multiples, margin and growth profiles,
-# and the top targets within the selected sector.
-# ─────────────────────────────────────────────────────────
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -26,11 +15,11 @@ st.markdown(
     "before interpreting any individual company's comps."
 )
 
-# ── Load data ──────────────────────────────────────────────────────────────────
+
 leaderboard  = load_leaderboard()
 benchmarks   = load_sector_benchmarks()
 
-# ── Sector selector ────────────────────────────────────────────────────────────
+
 all_sectors    = sorted(leaderboard["sector"].dropna().unique().tolist())
 selected_sector = st.selectbox(
     "Select a sector",
@@ -43,7 +32,7 @@ sector_bench = benchmarks[benchmarks["sector"] == selected_sector]
 
 st.divider()
 
-# ── Sector summary metrics ─────────────────────────────────────────────────────
+
 st.subheader(f"{selected_sector} — Sector Overview")
 
 b1, b2, b3, b4, b5 = st.columns(5)
@@ -53,7 +42,7 @@ with b2:
     s_count = (sector_df["score_tier"] == "S-tier").sum()
     st.metric("S-tier Targets", s_count)
 with b3:
-    # Get median EV/EBITDA from benchmarks
+
     ev_row = sector_bench[sector_bench["metric"] == "ev_to_ebitda"]
     if not ev_row.empty:
         st.metric("Median EV/EBITDA", f"{ev_row.iloc[0]['median']:.1f}x")
@@ -74,7 +63,7 @@ with b5:
 
 st.divider()
 
-# ── Cross-sector multiple comparison ──────────────────────────────────────────
+
 st.subheader("EV/EBITDA Multiples Across All Sectors")
 st.caption(
     "Median EV/EBITDA by sector with P25–P75 range shown as error bars. "
@@ -117,7 +106,7 @@ st.plotly_chart(fig_cross, use_container_width=True)
 
 st.divider()
 
-# ── Metric distributions within selected sector ────────────────────────────────
+
 st.subheader(f"Metric Distributions — {selected_sector}")
 
 metric_pairs = [
@@ -155,7 +144,7 @@ for i, (metric, label, unit) in enumerate(metric_pairs):
 
 st.divider()
 
-# ── Top targets in sector ──────────────────────────────────────────────────────
+
 st.subheader(f"Top Acquisition Targets — {selected_sector}")
 st.caption("Companies in this sector ranked by Acquirability Score.")
 
