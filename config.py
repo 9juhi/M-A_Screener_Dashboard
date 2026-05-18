@@ -1,4 +1,7 @@
-SIMFIN_API_KEY = "e0bc180b-aa44-4058-ba3b-1830ff76fcaa"
+import os
+
+
+SIMFIN_API_KEY = os.getenv("SIMFIN_API_KEY")
 
 
 RAW_DIR       = "data/raw"
